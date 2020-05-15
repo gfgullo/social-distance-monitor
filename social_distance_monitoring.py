@@ -3,13 +3,16 @@ import numpy as np
 from scipy.spatial import distance as dist
 
 TARGET_CLASS = "person"
-MIN_CONFIDENCE = 0.3
-MIN_DISTANCE = 100
+MIN_CONFIDENCE = 0.5
+MIN_DISTANCE = 30
 
 SIZE = (320, 320)
 
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
+
+LINE_THICKNESS = 1
+CIRCLE_RADIUS =  3
 
 
 def load_yolo(yolo_path=""):
@@ -54,6 +57,7 @@ def get_boxes(outputs, height, width):
     
     return boxes
 
+
 def get_centroids(rects):
 
     centroids = []
@@ -66,15 +70,16 @@ def get_centroids(rects):
 def get_centroid(rect):
     return ((2*rect[0]+rect[2])//2, (2*rect[1]+rect[3])//2)
 
+
 def compute_distances(centroids):
     centroids = np.array(centroids)
     dist_matrix = dist.cdist(centroids, centroids)
     dist_matrix = dist_matrix+np.eye(dist_matrix.shape[0], dist_matrix.shape[1])*1000
     return dist_matrix
 
+
 def get_contact_indices(dist_matrix):
-    indices = np.where(dist_matrix<=100)
-    print(indices)
+    indices = np.where((dist_matrix<=MIN_DISTANCE) & (dist_matrix>5))
     contact_indices = list(zip(indices[0],indices[1]))
     #contact_indices = np.column_stack([indices[0], indices[1]])
     return contact_indices
@@ -89,10 +94,10 @@ def draw_results(img, centroids, alert):
         centroid1 = centroids[c1]
         centroid2 = centroids[c2]
 
-        cv2.circle(img, (centroid1[0], centroid1[1]), 10, RED, cv2.FILLED)
-        cv2.circle(img, (centroid2[0], centroid2[1]), 10, RED, cv2.FILLED)
+        cv2.circle(img, (centroid1[0], centroid1[1]), CIRCLE_RADIUS, RED, cv2.FILLED)
+        cv2.circle(img, (centroid2[0], centroid2[1]), CIRCLE_RADIUS, RED, cv2.FILLED)
 
-        cv2.line(img, centroid1, centroid2, GREEN, thickness=4)
+        cv2.line(img, centroid1, centroid2, RED, thickness=LINE_THICKNESS)
 
         centroids_drawn.add(centroid1)
         centroids_drawn.add(centroid2)
@@ -100,25 +105,58 @@ def draw_results(img, centroids, alert):
     centroids_to_draw = set(centroids) - centroids_drawn
 
     for centroid in centroids_to_draw:
-        cv2.circle(img, (centroid[0],centroid[1]), 10, (0, 255, 0), cv2.FILLED)
+        cv2.circle(img, (centroid[0],centroid[1]), CIRCLE_RADIUS, (0, 255, 0), cv2.FILLED)
 
     return img
     
 
+
 net, classes, colors, output_layers = load_yolo()
 
-#img_path = input("Insert image path: ")
-img_path = "pic.png"
+#video_path = input("Insert video path: ")
+input_video_path = "video.mp4"
+output_video_path = "output.avi"
 
-img = cv2.imread(img_path)
-blob, outputs = detect_people(img, net, output_layers)
-boxes = get_boxes(outputs, img.shape[0], img.shape[1])
-centroids = get_centroids(boxes)
+cap = cv2.VideoCapture(input_video_path)
+ret, frame = cap.read()
 
-dist_matrix = compute_distances(boxes)
-contact_indices = get_contact_indices(dist_matrix)
+if(not ret):
+    print("Errore durante il caricamento del video")
+    exit(0)
 
-img = draw_results(img, centroids, contact_indices)
+codec = cv2.VideoWriter_fourcc(*'MJPG')
+out = cv2.VideoWriter(output_video_path, codec, 20.0, (frame.shape[0], frame.shape[1]))
 
-cv2.imshow("img", img)
-cv2.waitKey(0)
+
+frames_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+current_frame = 1
+
+while(cap.isOpened()):
+
+    ret, frame = cap.read()
+
+    if(not ret):
+        break
+
+    print("Processing frame %d of %d..." % (current_frame, frames_count), end="")
+
+    blob, outputs = detect_people(frame, net, output_layers)
+    boxes = get_boxes(outputs, frame.shape[0], frame.shape[1])
+    centroids = get_centroids(boxes)
+
+    dist_matrix = compute_distances(centroids)
+    contact_indices = get_contact_indices(dist_matrix)
+
+    frame = draw_results(frame, centroids, contact_indices)
+
+    print("DONE")
+
+    cv2.imshow("Social Distance Monitoring", frame)
+    cv2.waitKey(1)
+    out.write(frame)
+
+    current_frame+=1
+
+cap.release()
+out.release()
+cv2.destroyAllWindows()
